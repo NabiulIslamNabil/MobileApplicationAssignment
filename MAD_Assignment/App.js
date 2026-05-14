@@ -45,6 +45,8 @@ const COLUMNS = [
   { status: 'COMPLETED', title: 'COMPLETED', color: '#10B981' },
 ];
 
+const NOTIFICATION_CHANNEL_ID = 'task-reminders';
+
 const priorityRank = { HIGH: 3, MEDIUM: 2, LOW: 1 };
 const statusRank = { TODO: 1, IN_PROGRESS: 2, COMPLETED: 3 };
 const urgencyRank = { OVERDUE: 1, URGENT: 2, WARNING: 3, SAFE: 4, COMPLETED: 5 };
@@ -115,13 +117,28 @@ export default function App() {
       } else {
         setShowNameModal(true);
       }
-      await Notifications.requestPermissionsAsync();
-      notificationSub = Notifications.addNotificationReceivedListener((notification) => {
-        Alert.alert(
-          notification.request.content.title || 'Task Reminder',
-          notification.request.content.body || 'A task reminder was received.',
-        );
-      });
+      if (Platform.OS === 'android') {
+        await Notifications.setNotificationChannelAsync(NOTIFICATION_CHANNEL_ID, {
+          name: 'Task reminders',
+          importance: Notifications.AndroidImportance.HIGH,
+          sound: 'default',
+          vibrationPattern: [0, 250, 250, 250],
+          lightColor: '#6366F1',
+        });
+      }
+      if (Platform.OS === 'web' && typeof window !== 'undefined' && 'Notification' in window) {
+        if (window.Notification.permission === 'default') {
+          await window.Notification.requestPermission();
+        }
+      } else {
+        await Notifications.requestPermissionsAsync();
+        notificationSub = Notifications.addNotificationReceivedListener((notification) => {
+          Alert.alert(
+            notification.request.content.title || 'Task Reminder',
+            notification.request.content.body || 'A task reminder was received.',
+          );
+        });
+      }
     }
     bootstrap();
     return () => notificationSub?.remove?.();
@@ -135,10 +152,12 @@ export default function App() {
       .map((task) => {
         const delay = new Date(task.reminderTime).getTime() - Date.now();
         return setTimeout(() => {
-          Alert.alert(
-            `Task Reminder: ${task.title}`,
-            `Deadline: ${formatDate(task.deadline)} - Priority: ${task.priority}`,
-          );
+          const title = `Task Reminder: ${task.title}`;
+          const body = `Deadline: ${formatDate(task.deadline)} - Priority: ${task.priority}`;
+          if (typeof window !== 'undefined' && 'Notification' in window && window.Notification.permission === 'granted') {
+            new window.Notification(title, { body });
+          }
+          Alert.alert(title, body);
         }, delay);
       });
     return () => {
@@ -170,13 +189,49 @@ export default function App() {
         content: {
           title: `Task Reminder: ${task.title}`,
           body: `Deadline: ${formatDate(task.deadline)} - Priority: ${task.priority}`,
+          sound: 'default',
         },
-        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: triggerDate },
+        trigger: {
+          type: Notifications.SchedulableTriggerInputTypes.DATE,
+          date: triggerDate,
+          channelId: NOTIFICATION_CHANNEL_ID,
+        },
       });
     } catch (error) {
       console.warn('Unable to schedule notification', error);
       return null;
     }
+  }
+
+  async function testNotification() {
+    const title = 'TaskFlow Test Notification';
+    const body = 'Notifications are working. Create a task with a future reminder time to test task reminders.';
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        const permission = window.Notification.permission === 'default'
+          ? await window.Notification.requestPermission()
+          : window.Notification.permission;
+        if (permission === 'granted') {
+          new window.Notification(title, { body });
+        }
+      }
+      Alert.alert(title, body);
+      return;
+    }
+    const permission = await Notifications.requestPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Notifications disabled', 'Enable notification permission for this app, then try again.');
+      return;
+    }
+    await Notifications.scheduleNotificationAsync({
+      content: { title, body, sound: 'default' },
+      trigger: {
+        type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
+        seconds: 5,
+        channelId: NOTIFICATION_CHANNEL_ID,
+      },
+    });
+    Alert.alert('Test scheduled', 'A local notification should appear in about 5 seconds.');
   }
 
   async function cancelNotification(notificationId) {
@@ -398,9 +453,6 @@ export default function App() {
             <Text style={view === 'list' ? styles.toggleActiveText : styles.toggleText}>List View</Text>
           </Pressable>
         </View>
-        {view === 'list' ? (
-          <Text style={styles.viewHint}>List View shows every task in one sortable, detailed list.</Text>
-        ) : null}
         {view === 'list' ? <SortChipBar sortBy={sortBy} onSortChange={setSortBy} /> : null}
         {view === 'board' ? renderBoard() : (
           <FlatList
@@ -411,11 +463,17 @@ export default function App() {
             ListEmptyComponent={<Text style={styles.emptyText}>No tasks yet. Switch to Board and add your first task.</Text>}
           />
         )}
-        <AddTaskModal visible={showAddModal} onClose={() => setShowAddModal(false)} onSubmit={addTask} />
+        <AddTaskModal
+          visible={showAddModal}
+          onClose={() => setShowAddModal(false)}
+          onSubmit={addTask}
+          onTestNotification={testNotification}
+        />
         <AddTaskModal
           visible={showEditModal}
           onClose={() => setShowEditModal(false)}
           onSubmit={(taskData) => editTask(selectedTaskLive.id, taskData)}
+          onTestNotification={testNotification}
           initialTask={selectedTaskLive}
           submitLabel="Save Changes"
         />

@@ -65,45 +65,6 @@ export function formatDateTime(value) {
   return `${formatDate(value)} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 }
 
-function toDateInputValue(value) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return date.toISOString().slice(0, 10);
-}
-
-function toTimeInputValue(value) {
-  if (!value) return '';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '';
-  return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
-}
-
-function WebDateTimeInput({ mode, value, onChange }) {
-  if (Platform.OS !== 'web') return null;
-  return React.createElement('input', {
-    type: mode === 'date' ? 'date' : 'time',
-    value: mode === 'date' ? toDateInputValue(value) : toTimeInputValue(value),
-    onChange: (event) => {
-      const nextValue = event.target.value;
-      if (!nextValue) {
-        onChange(null);
-        return;
-      }
-      if (mode === 'date') {
-        const [year, month, day] = nextValue.split('-').map(Number);
-        onChange(new Date(year, month - 1, day));
-        return;
-      }
-      const [hours, minutes] = nextValue.split(':').map(Number);
-      const nextDate = value ? new Date(value) : new Date();
-      nextDate.setHours(hours, minutes, 0, 0);
-      onChange(nextDate);
-    },
-    style: styles.webDateTimeInput,
-  });
-}
-
 export function formatRequiredTime(task) {
   const hours = Number(task.requiredHours || 0);
   const minutes = Number(task.requiredMinutes || 0);
@@ -330,15 +291,66 @@ function getInitialForm(initialTask) {
   };
 }
 
-export function AddTaskModal({ visible, onClose, onSubmit, initialTask = null, submitLabel = 'Create Task' }) {
+function getDeadlineParts(date) {
+  if (!date || Number.isNaN(date.getTime())) return { day: '', month: '', year: '' };
+  return {
+    day: date.getDate().toString().padStart(2, '0'),
+    month: (date.getMonth() + 1).toString().padStart(2, '0'),
+    year: date.getFullYear().toString(),
+  };
+}
+
+function getReminderParts(date) {
+  if (!date || Number.isNaN(date.getTime())) return { hour: '', minute: '', period: 'AM' };
+  const hours = date.getHours();
+  return {
+    hour: ((hours % 12) || 12).toString().padStart(2, '0'),
+    minute: date.getMinutes().toString().padStart(2, '0'),
+    period: hours >= 12 ? 'PM' : 'AM',
+  };
+}
+
+function buildDateFromParts(parts) {
+  const day = Number.parseInt(parts.day, 10);
+  const month = Number.parseInt(parts.month, 10);
+  const year = Number.parseInt(parts.year, 10);
+  if (!day || !month || !year || parts.year.length !== 4) return null;
+  const date = new Date(year, month - 1, day);
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) return null;
+  return date;
+}
+
+function buildTimeFromParts(parts) {
+  const hour = Number.parseInt(parts.hour, 10);
+  const minute = Number.parseInt(parts.minute, 10);
+  if (!hour || Number.isNaN(minute) || hour < 1 || hour > 12 || minute < 0 || minute > 59) return null;
+  const date = new Date();
+  const normalizedHour = parts.period === 'PM' ? (hour % 12) + 12 : hour % 12;
+  date.setHours(normalizedHour, minute, 0, 0);
+  return date;
+}
+
+export function AddTaskModal({
+  visible,
+  onClose,
+  onSubmit,
+  onTestNotification,
+  initialTask = null,
+  submitLabel = 'Create Task',
+}) {
   const [form, setForm] = useState(getInitialForm(initialTask));
   const [nameInput, setNameInput] = useState('');
   const [showDeadlinePicker, setShowDeadlinePicker] = useState(false);
   const [showReminderPicker, setShowReminderPicker] = useState(false);
+  const [deadlineParts, setDeadlineParts] = useState(getDeadlineParts(form.deadline));
+  const [reminderParts, setReminderParts] = useState(getReminderParts(form.reminderTime));
 
   useEffect(() => {
     if (visible) {
-      setForm(getInitialForm(initialTask));
+      const nextForm = getInitialForm(initialTask);
+      setForm(nextForm);
+      setDeadlineParts(getDeadlineParts(nextForm.deadline));
+      setReminderParts(getReminderParts(nextForm.reminderTime));
       setNameInput('');
       setShowDeadlinePicker(false);
       setShowReminderPicker(false);
@@ -358,6 +370,28 @@ export function AddTaskModal({ visible, onClose, onSubmit, initialTask = null, s
     setValue('assignedUsers', form.assignedUsers.filter((user) => user !== name));
   };
 
+  const updateDeadlinePart = (key, value) => {
+    const maxLength = key === 'year' ? 4 : 2;
+    const nextParts = { ...deadlineParts, [key]: value.replace(/[^0-9]/g, '').slice(0, maxLength) };
+    setDeadlineParts(nextParts);
+    const date = buildDateFromParts(nextParts);
+    setValue('deadline', date);
+  };
+
+  const updateReminderPart = (key, value) => {
+    const nextParts = { ...reminderParts, [key]: value.replace(/[^0-9]/g, '').slice(0, 2) };
+    setReminderParts(nextParts);
+    const date = buildTimeFromParts(nextParts);
+    setValue('reminderTime', date);
+  };
+
+  const updateReminderPeriod = (period) => {
+    const nextParts = { ...reminderParts, period };
+    setReminderParts(nextParts);
+    const date = buildTimeFromParts(nextParts);
+    setValue('reminderTime', date);
+  };
+
   const handleSubmit = () => {
     const title = form.title.trim();
     const hours = Number.parseInt(form.requiredHours || '0', 10);
@@ -366,8 +400,11 @@ export function AddTaskModal({ visible, onClose, onSubmit, initialTask = null, s
       Alert.alert('Missing title', 'Please enter a task title.');
       return;
     }
-    if (!form.deadline) {
-      Alert.alert('Missing deadline', 'Please pick a deadline date.');
+    const deadline = Platform.OS === 'web' ? buildDateFromParts(deadlineParts) : form.deadline;
+    const reminderClock = Platform.OS === 'web' ? buildTimeFromParts(reminderParts) : form.reminderTime;
+
+    if (!deadline) {
+      Alert.alert('Missing deadline', 'Please enter a valid deadline date.');
       return;
     }
     if (Number.isNaN(hours) || Number.isNaN(minutes) || hours < 0 || minutes < 0 || minutes > 59 || hours + minutes <= 0) {
@@ -376,9 +413,9 @@ export function AddTaskModal({ visible, onClose, onSubmit, initialTask = null, s
     }
 
     let reminderTime = null;
-    if (form.reminderTime) {
-      const combined = new Date(form.deadline);
-      combined.setHours(form.reminderTime.getHours(), form.reminderTime.getMinutes(), 0, 0);
+    if (reminderClock) {
+      const combined = new Date(deadline);
+      combined.setHours(reminderClock.getHours(), reminderClock.getMinutes(), 0, 0);
       reminderTime = combined.toISOString();
     }
 
@@ -388,7 +425,7 @@ export function AddTaskModal({ visible, onClose, onSubmit, initialTask = null, s
       priority: form.priority,
       requiredHours: hours,
       requiredMinutes: minutes,
-      deadline: form.deadline.toISOString(),
+      deadline: deadline.toISOString(),
       reminderTime,
       assignedUsers: form.assignedUsers,
     });
@@ -454,15 +491,44 @@ export function AddTaskModal({ visible, onClose, onSubmit, initialTask = null, s
             <Pressable
               style={styles.secondaryButton}
               onPress={() => {
-                if (Platform.OS === 'web' && !form.deadline) setValue('deadline', new Date());
                 setShowDeadlinePicker(true);
               }}
             >
               <Text style={styles.secondaryButtonText}>Set Deadline</Text>
             </Pressable>
-            <Text style={styles.selectedDate}>{form.deadline ? formatDate(form.deadline) : 'No deadline selected'}</Text>
+            {Platform.OS === 'web' ? (
+              <View style={styles.datePartsRow}>
+                <TextInput
+                  style={[styles.input, styles.datePartInput]}
+                  placeholder="DD"
+                  placeholderTextColor={COLORS.muted}
+                  keyboardType="number-pad"
+                  value={deadlineParts.day}
+                  onChangeText={(value) => updateDeadlinePart('day', value)}
+                />
+                <TextInput
+                  style={[styles.input, styles.datePartInput]}
+                  placeholder="MM"
+                  placeholderTextColor={COLORS.muted}
+                  keyboardType="number-pad"
+                  value={deadlineParts.month}
+                  onChangeText={(value) => updateDeadlinePart('month', value)}
+                />
+                <TextInput
+                  style={[styles.input, styles.yearPartInput]}
+                  placeholder="YYYY"
+                  placeholderTextColor={COLORS.muted}
+                  keyboardType="number-pad"
+                  value={deadlineParts.year}
+                  onChangeText={(value) => updateDeadlinePart('year', value)}
+                />
+              </View>
+            ) : null}
+            <Text style={styles.selectedDate}>
+              {form.deadline ? formatDate(form.deadline) : 'Enter deadline as DD / MM / YYYY'}
+            </Text>
             {showDeadlinePicker && Platform.OS === 'web' ? (
-              <WebDateTimeInput mode="date" value={form.deadline || new Date()} onChange={(date) => setValue('deadline', date)} />
+              <Text style={styles.helperText}>Use the three boxes above. Example: 25 / 05 / 2026</Text>
             ) : null}
             {showDeadlinePicker && Platform.OS !== 'web' ? (
               <DateTimePicker
@@ -478,19 +544,49 @@ export function AddTaskModal({ visible, onClose, onSubmit, initialTask = null, s
             <Pressable
               style={styles.secondaryButton}
               onPress={() => {
-                if (Platform.OS === 'web' && !form.reminderTime) setValue('reminderTime', new Date());
                 setShowReminderPicker(true);
               }}
             >
               <Text style={styles.secondaryButtonText}>Set Reminder Time</Text>
             </Pressable>
+            {Platform.OS === 'web' ? (
+              <View style={styles.reminderRow}>
+                <TextInput
+                  style={[styles.input, styles.datePartInput]}
+                  placeholder="HH"
+                  placeholderTextColor={COLORS.muted}
+                  keyboardType="number-pad"
+                  value={reminderParts.hour}
+                  onChangeText={(value) => updateReminderPart('hour', value)}
+                />
+                <TextInput
+                  style={[styles.input, styles.datePartInput]}
+                  placeholder="MM"
+                  placeholderTextColor={COLORS.muted}
+                  keyboardType="number-pad"
+                  value={reminderParts.minute}
+                  onChangeText={(value) => updateReminderPart('minute', value)}
+                />
+                {['AM', 'PM'].map((period) => (
+                  <Pressable
+                    key={period}
+                    style={[styles.periodButton, reminderParts.period === period ? styles.periodButtonActive : null]}
+                    onPress={() => updateReminderPeriod(period)}
+                  >
+                    <Text style={reminderParts.period === period ? styles.periodButtonActiveText : styles.periodButtonText}>
+                      {period}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
             <Text style={styles.selectedDate}>
               {form.reminderTime
                 ? form.reminderTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                : 'No reminder selected'}
+                : 'Optional. Enter reminder as HH : MM AM/PM'}
             </Text>
             {showReminderPicker && Platform.OS === 'web' ? (
-              <WebDateTimeInput mode="time" value={form.reminderTime || new Date()} onChange={(date) => setValue('reminderTime', date)} />
+              <Text style={styles.helperText}>For a fast test, set this one or two minutes ahead of the current time.</Text>
             ) : null}
             {showReminderPicker && Platform.OS !== 'web' ? (
               <DateTimePicker
@@ -524,6 +620,9 @@ export function AddTaskModal({ visible, onClose, onSubmit, initialTask = null, s
                 </Pressable>
               ))}
             </View>
+            <Pressable style={styles.testButton} onPress={onTestNotification}>
+              <Text style={styles.testButtonText}>Test Notification</Text>
+            </Pressable>
             <Pressable style={styles.primaryButton} onPress={handleSubmit}>
               <Text style={styles.primaryButtonText}>{submitLabel}</Text>
             </Pressable>
@@ -865,6 +964,17 @@ const styles = StyleSheet.create({
     color: COLORS.high,
     fontWeight: '900',
   },
+  datePartInput: {
+    flex: 1,
+    marginBottom: 0,
+    textAlign: 'center',
+  },
+  datePartsRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 8,
+    marginTop: 10,
+  },
   descriptionText: {
     color: COLORS.muted,
     fontSize: 14,
@@ -942,6 +1052,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '800',
     marginBottom: 8,
+  },
+  helperText: {
+    color: COLORS.muted,
+    fontSize: 12,
+    lineHeight: 18,
+    marginBottom: 12,
+    marginTop: -4,
   },
   listBadgeRow: {
     alignItems: 'center',
@@ -1022,6 +1139,28 @@ const styles = StyleSheet.create({
   },
   overflowAvatar: {
     backgroundColor: COLORS.border,
+  },
+  periodButton: {
+    alignItems: 'center',
+    backgroundColor: COLORS.background,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    borderWidth: 1,
+    justifyContent: 'center',
+    minWidth: 58,
+    paddingHorizontal: 12,
+  },
+  periodButtonActive: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary,
+  },
+  periodButtonActiveText: {
+    color: '#FFFFFF',
+    fontWeight: '900',
+  },
+  periodButtonText: {
+    color: COLORS.muted,
+    fontWeight: '900',
   },
   postButton: {
     alignItems: 'center',
@@ -1165,6 +1304,25 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: 10,
   },
+  reminderRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 8,
+    marginTop: 10,
+  },
+  testButton: {
+    alignItems: 'center',
+    borderColor: COLORS.completed,
+    borderRadius: 14,
+    borderWidth: 1,
+    marginTop: 6,
+    paddingVertical: 13,
+  },
+  testButtonText: {
+    color: COLORS.completed,
+    fontSize: 14,
+    fontWeight: '900',
+  },
   timelineItem: {
     backgroundColor: COLORS.background,
     borderColor: COLORS.border,
@@ -1201,21 +1359,9 @@ const styles = StyleSheet.create({
     color: COLORS.text,
     fontWeight: '700',
   },
-  webDateTimeInput: {
-    backgroundColor: COLORS.background,
-    borderColor: COLORS.border,
-    borderRadius: 12,
-    borderStyle: 'solid',
-    borderWidth: 1,
-    color: COLORS.text,
-    fontFamily: 'system-ui',
-    fontSize: 15,
-    marginBottom: 12,
-    outlineColor: COLORS.primary,
-    paddingBottom: 12,
-    paddingLeft: 14,
-    paddingRight: 14,
-    paddingTop: 12,
-    width: '100%',
+  yearPartInput: {
+    flex: 2,
+    marginBottom: 0,
+    textAlign: 'center',
   },
 });
