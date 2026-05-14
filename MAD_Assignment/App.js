@@ -11,6 +11,7 @@ import {
   StyleSheet,
   Text,
   TextInput,
+  useWindowDimensions,
   View,
 } from 'react-native';
 import { StatusBar } from 'expo-status-bar';
@@ -84,6 +85,7 @@ export function getSortedTasks(tasks, sortBy) {
 }
 
 export default function App() {
+  const { width } = useWindowDimensions();
   const [tasks, setTasks] = useState([]);
   const [view, setView] = useState('board');
   const [sortBy, setSortBy] = useState('dueDate');
@@ -96,6 +98,7 @@ export default function App() {
   const [showEditModal, setShowEditModal] = useState(false);
   const [draggingTaskId, setDraggingTaskId] = useState(null);
   const [columnLayouts, setColumnLayouts] = useState({});
+  const reminderTimers = useRef([]);
   const columnRefs = {
     TODO: useRef(null),
     IN_PROGRESS: useRef(null),
@@ -124,12 +127,33 @@ export default function App() {
     return () => notificationSub?.remove?.();
   }, []);
 
+  useEffect(() => {
+    if (Platform.OS !== 'web') return undefined;
+    reminderTimers.current.forEach((timer) => clearTimeout(timer));
+    reminderTimers.current = tasks
+      .filter((task) => task.reminderTime && new Date(task.reminderTime).getTime() > Date.now())
+      .map((task) => {
+        const delay = new Date(task.reminderTime).getTime() - Date.now();
+        return setTimeout(() => {
+          Alert.alert(
+            `Task Reminder: ${task.title}`,
+            `Deadline: ${formatDate(task.deadline)} - Priority: ${task.priority}`,
+          );
+        }, delay);
+      });
+    return () => {
+      reminderTimers.current.forEach((timer) => clearTimeout(timer));
+      reminderTimers.current = [];
+    };
+  }, [tasks]);
+
   const selectedTaskLive = useMemo(
     () => tasks.find((task) => task.id === selectedTask?.id) || selectedTask,
     [selectedTask, tasks],
   );
 
   const sortedTasks = useMemo(() => getSortedTasks(tasks, sortBy), [sortBy, tasks]);
+  const boardColumnWidth = Math.max(300, Math.floor((width - 60) / 3));
 
   async function persist(nextTasks) {
     setTasks(nextTasks);
@@ -140,13 +164,19 @@ export default function App() {
     if (!task.reminderTime) return null;
     const triggerDate = new Date(task.reminderTime);
     if (Number.isNaN(triggerDate.getTime()) || triggerDate.getTime() <= Date.now()) return null;
-    return Notifications.scheduleNotificationAsync({
-      content: {
-        title: `Task Reminder: ${task.title}`,
-        body: `Deadline: ${formatDate(task.deadline)} - Priority: ${task.priority}`,
-      },
-      trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: triggerDate },
-    });
+    if (Platform.OS === 'web') return null;
+    try {
+      return await Notifications.scheduleNotificationAsync({
+        content: {
+          title: `Task Reminder: ${task.title}`,
+          body: `Deadline: ${formatDate(task.deadline)} - Priority: ${task.priority}`,
+        },
+        trigger: { type: Notifications.SchedulableTriggerInputTypes.DATE, date: triggerDate },
+      });
+    } catch (error) {
+      console.warn('Unable to schedule notification', error);
+      return null;
+    }
   }
 
   async function cancelNotification(notificationId) {
@@ -213,11 +243,24 @@ export default function App() {
     setSelectedTask(null);
   }
 
-  async function confirmDelete(id) {
+  function confirmDelete(id) {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      if (window.confirm('Delete this task? This removes the task, comments, activity, and reminder.')) {
+        deleteTask(id);
+      }
+      return;
+    }
     Alert.alert('Delete task?', 'This removes the task, comments, activity, and reminder.', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Delete', style: 'destructive', onPress: () => deleteTask(id) },
     ]);
+  }
+
+  function showIncompleteAlert() {
+    Alert.alert(
+      'Task is not completed yet',
+      'Open the task details and use "Mark as Completed" when the work is actually finished.',
+    );
   }
 
   async function moveTask(id, newStatus) {
@@ -265,7 +308,12 @@ export default function App() {
 
   function handleCardDrop(id, x, y) {
     const status = detectDropColumn(x, y);
-    if (status) moveTask(id, status);
+    const task = tasks.find((item) => item.id === id);
+    if (status === 'COMPLETED' && task?.status !== 'COMPLETED') {
+      showIncompleteAlert();
+    } else if (status) {
+      moveTask(id, status);
+    }
     setDraggingTaskId(null);
   }
 
@@ -280,9 +328,16 @@ export default function App() {
 
   function handleCardLongPress(task) {
     const actions = [
-      { text: 'Edit', onPress: () => { setSelectedTask(task); setShowEditModal(true); } },
+      {
+        text: 'Edit',
+        onPress: () => {
+          setSelectedTask(task);
+          setShowDetailModal(false);
+          setShowEditModal(true);
+        },
+      },
       { text: 'Move to In Progress', onPress: () => moveTask(task.id, 'IN_PROGRESS') },
-      { text: 'Move to Completed', onPress: () => moveTask(task.id, 'COMPLETED') },
+      { text: 'Move to Completed', onPress: () => showIncompleteAlert() },
       { text: 'Delete', style: 'destructive', onPress: () => confirmDelete(task.id) },
       { text: 'Cancel', style: 'cancel' },
     ];
@@ -309,6 +364,7 @@ export default function App() {
           status={column.status}
           tasks={tasks.filter((task) => task.status === column.status)}
           columnColor={column.color}
+          columnWidth={boardColumnWidth}
           onAddTask={() => setShowAddModal(true)}
           onCardPress={openTask}
           onCardLongPress={handleCardLongPress}
@@ -329,19 +385,22 @@ export default function App() {
         <StatusBar style="light" />
         <View style={styles.header}>
           <View>
-            <Text style={styles.appName}>TaskFlow</Text>
-            <Text style={styles.subTitle}>Kanban task manager</Text>
+            <Text style={styles.appName}>Nabiul's Task Manager</Text>
+            <Text style={styles.subTitle}>A Complete Task Manager Application</Text>
           </View>
           <Text style={styles.greeting}>{userName ? `Hi, ${userName} 👋` : 'Welcome'}</Text>
         </View>
         <View style={styles.toggleRow}>
           <Pressable style={[styles.toggle, view === 'board' ? styles.toggleActive : styles.toggleInactive]} onPress={() => setView('board')}>
-            <Text style={view === 'board' ? styles.toggleActiveText : styles.toggleText}>Board</Text>
+            <Text style={view === 'board' ? styles.toggleActiveText : styles.toggleText}>Board View</Text>
           </Pressable>
           <Pressable style={[styles.toggle, view === 'list' ? styles.toggleActive : styles.toggleInactive]} onPress={() => setView('list')}>
-            <Text style={view === 'list' ? styles.toggleActiveText : styles.toggleText}>List</Text>
+            <Text style={view === 'list' ? styles.toggleActiveText : styles.toggleText}>List View</Text>
           </Pressable>
         </View>
+        {view === 'list' ? (
+          <Text style={styles.viewHint}>List View shows every task in one sortable, detailed list.</Text>
+        ) : null}
         {view === 'list' ? <SortChipBar sortBy={sortBy} onSortChange={setSortBy} /> : null}
         {view === 'board' ? renderBoard() : (
           <FlatList
@@ -364,7 +423,11 @@ export default function App() {
           task={selectedTaskLive}
           visible={showDetailModal}
           onClose={() => setShowDetailModal(false)}
-          onEdit={(task) => { setSelectedTask(task); setShowEditModal(true); }}
+          onEdit={(task) => {
+            setSelectedTask(task);
+            setShowDetailModal(false);
+            setShowEditModal(true);
+          }}
           onDelete={confirmDelete}
           onComplete={(id) => moveTask(id, 'COMPLETED')}
           onAddComment={addComment}
@@ -373,7 +436,7 @@ export default function App() {
         <Modal visible={showNameModal} transparent animationType="fade">
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.nameOverlay}>
             <View style={styles.nameModal}>
-              <Text style={styles.nameTitle}>Welcome to TaskFlow</Text>
+              <Text style={styles.nameTitle}>Welcome to Nabiul's Task Manager</Text>
               <Text style={styles.nameCopy}>Enter your name for comments and activity logs.</Text>
               <TextInput
                 style={styles.nameInput}

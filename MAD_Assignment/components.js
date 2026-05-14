@@ -65,6 +65,45 @@ export function formatDateTime(value) {
   return `${formatDate(value)} ${date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
 }
 
+function toDateInputValue(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return date.toISOString().slice(0, 10);
+}
+
+function toTimeInputValue(value) {
+  if (!value) return '';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return '';
+  return `${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`;
+}
+
+function WebDateTimeInput({ mode, value, onChange }) {
+  if (Platform.OS !== 'web') return null;
+  return React.createElement('input', {
+    type: mode === 'date' ? 'date' : 'time',
+    value: mode === 'date' ? toDateInputValue(value) : toTimeInputValue(value),
+    onChange: (event) => {
+      const nextValue = event.target.value;
+      if (!nextValue) {
+        onChange(null);
+        return;
+      }
+      if (mode === 'date') {
+        const [year, month, day] = nextValue.split('-').map(Number);
+        onChange(new Date(year, month - 1, day));
+        return;
+      }
+      const [hours, minutes] = nextValue.split(':').map(Number);
+      const nextDate = value ? new Date(value) : new Date();
+      nextDate.setHours(hours, minutes, 0, 0);
+      onChange(nextDate);
+    },
+    style: styles.webDateTimeInput,
+  });
+}
+
 export function formatRequiredTime(task) {
   const hours = Number(task.requiredHours || 0);
   const minutes = Number(task.requiredMinutes || 0);
@@ -236,6 +275,7 @@ export function BoardColumn({
   onCardDrop,
   onDragStart,
   columnRef,
+  columnWidth,
 }) {
   const handleLayout = () => {
     requestAnimationFrame(() => {
@@ -246,7 +286,7 @@ export function BoardColumn({
   };
 
   return (
-    <View ref={columnRef} onLayout={handleLayout} style={[styles.column, { borderTopColor: columnColor }]}>
+    <View ref={columnRef} onLayout={handleLayout} style={[styles.column, { borderTopColor: columnColor, width: columnWidth }]}>
       <View style={styles.columnHeader}>
         <Text style={styles.columnTitle}>{title}</Text>
         <View style={[styles.countBadge, { backgroundColor: columnColor }]}>
@@ -357,7 +397,7 @@ export function AddTaskModal({ visible, onClose, onSubmit, initialTask = null, s
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
-        <View style={styles.formModal}>
+        <View style={[styles.formModal, initialTask ? styles.editFormModal : null]}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>{initialTask ? 'Edit Task' : 'Add Task'}</Text>
             <Pressable style={styles.iconButton} onPress={onClose}>
@@ -411,11 +451,20 @@ export function AddTaskModal({ visible, onClose, onSubmit, initialTask = null, s
                 onChangeText={(value) => setValue('requiredMinutes', value.replace(/[^0-9]/g, ''))}
               />
             </View>
-            <Pressable style={styles.secondaryButton} onPress={() => setShowDeadlinePicker(true)}>
+            <Pressable
+              style={styles.secondaryButton}
+              onPress={() => {
+                if (Platform.OS === 'web' && !form.deadline) setValue('deadline', new Date());
+                setShowDeadlinePicker(true);
+              }}
+            >
               <Text style={styles.secondaryButtonText}>Set Deadline</Text>
             </Pressable>
             <Text style={styles.selectedDate}>{form.deadline ? formatDate(form.deadline) : 'No deadline selected'}</Text>
-            {showDeadlinePicker ? (
+            {showDeadlinePicker && Platform.OS === 'web' ? (
+              <WebDateTimeInput mode="date" value={form.deadline || new Date()} onChange={(date) => setValue('deadline', date)} />
+            ) : null}
+            {showDeadlinePicker && Platform.OS !== 'web' ? (
               <DateTimePicker
                 value={form.deadline || new Date()}
                 mode="date"
@@ -426,7 +475,13 @@ export function AddTaskModal({ visible, onClose, onSubmit, initialTask = null, s
                 }}
               />
             ) : null}
-            <Pressable style={styles.secondaryButton} onPress={() => setShowReminderPicker(true)}>
+            <Pressable
+              style={styles.secondaryButton}
+              onPress={() => {
+                if (Platform.OS === 'web' && !form.reminderTime) setValue('reminderTime', new Date());
+                setShowReminderPicker(true);
+              }}
+            >
               <Text style={styles.secondaryButtonText}>Set Reminder Time</Text>
             </Pressable>
             <Text style={styles.selectedDate}>
@@ -434,7 +489,10 @@ export function AddTaskModal({ visible, onClose, onSubmit, initialTask = null, s
                 ? form.reminderTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                 : 'No reminder selected'}
             </Text>
-            {showReminderPicker ? (
+            {showReminderPicker && Platform.OS === 'web' ? (
+              <WebDateTimeInput mode="time" value={form.reminderTime || new Date()} onChange={(date) => setValue('reminderTime', date)} />
+            ) : null}
+            {showReminderPicker && Platform.OS !== 'web' ? (
               <DateTimePicker
                 value={form.reminderTime || new Date()}
                 mode="time"
@@ -575,19 +633,39 @@ export function ListViewItem({ task, onPress }) {
         <Text style={styles.listTitle} numberOfLines={1}>{task.title}</Text>
         <PriorityBadge priority={task.priority} />
       </View>
-      <View style={styles.listBadgeRow}>
-        <StatusBadge status={task.status} />
-        <Text style={styles.listMeta}>{formatDate(task.deadline)}</Text>
-        <Text style={styles.listMeta}>{formatRequiredTime(task)}</Text>
+      <Text style={styles.listDescription} numberOfLines={2}>
+        {task.description || 'No description added.'}
+      </Text>
+      <View style={styles.listDetailGrid}>
+        <View style={styles.listDetailCell}>
+          <Text style={styles.listLabel}>Status</Text>
+          <StatusBadge status={task.status} />
+        </View>
+        <View style={styles.listDetailCell}>
+          <Text style={styles.listLabel}>Deadline</Text>
+          <Text style={styles.listMeta}>{formatDate(task.deadline)}</Text>
+        </View>
+        <View style={styles.listDetailCell}>
+          <Text style={styles.listLabel}>Time</Text>
+          <Text style={styles.listMeta}>{formatRequiredTime(task)}</Text>
+        </View>
+        <View style={styles.listDetailCell}>
+          <Text style={styles.listLabel}>Assigned</Text>
+          <AvatarGroup users={task.assignedUsers} max={3} />
+        </View>
       </View>
-      <AvatarGroup users={task.assignedUsers} max={3} />
     </Pressable>
   );
 }
 
 export function SortChipBar({ sortBy, onSortChange }) {
   return (
-    <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.sortRow}>
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      style={styles.sortScroller}
+      contentContainerStyle={styles.sortRow}
+    >
       {SORTS.map((sort) => {
         const active = sortBy === sort.key;
         return (
@@ -716,12 +794,14 @@ const styles = StyleSheet.create({
   },
   column: {
     backgroundColor: COLORS.surface,
-    borderRadius: 14,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    borderWidth: 1,
     borderTopWidth: 4,
     height: '100%',
-    marginRight: 14,
+    marginRight: 12,
+    minHeight: 560,
     padding: 14,
-    width: 292,
   },
   columnHeader: {
     alignItems: 'center',
@@ -817,8 +897,13 @@ const styles = StyleSheet.create({
   emptyColumnText: {
     color: COLORS.muted,
     fontSize: 13,
-    paddingTop: 20,
+    paddingTop: 36,
     textAlign: 'center',
+  },
+  editFormModal: {
+    elevation: 40,
+    shadowOpacity: 0.35,
+    zIndex: 40,
   },
   formModal: {
     backgroundColor: COLORS.surface,
@@ -866,11 +951,38 @@ const styles = StyleSheet.create({
     marginBottom: 8,
     marginTop: 8,
   },
+  listDetailCell: {
+    flexBasis: 150,
+    flexGrow: 1,
+    gap: 5,
+    minHeight: 44,
+  },
+  listDetailGrid: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 12,
+    marginTop: 12,
+  },
+  listLabel: {
+    color: COLORS.muted,
+    fontSize: 11,
+    fontWeight: '900',
+    textTransform: 'uppercase',
+  },
   listItem: {
     borderLeftWidth: 5,
     borderRadius: 14,
+    borderColor: COLORS.border,
+    borderWidth: 1,
     marginBottom: 12,
     padding: 14,
+  },
+  listDescription: {
+    color: COLORS.muted,
+    fontSize: 13,
+    lineHeight: 19,
+    marginTop: 8,
   },
   listMeta: {
     color: COLORS.muted,
@@ -997,11 +1109,13 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   sortChip: {
+    alignItems: 'center',
     borderRadius: 20,
     borderWidth: 1,
+    height: 38,
+    justifyContent: 'center',
     marginRight: 8,
     paddingHorizontal: 14,
-    paddingVertical: 9,
   },
   sortChipActive: {
     backgroundColor: COLORS.primary,
@@ -1019,7 +1133,14 @@ const styles = StyleSheet.create({
     color: COLORS.muted,
     fontWeight: '800',
   },
+  sortScroller: {
+    flexGrow: 0,
+    flexShrink: 0,
+    height: 52,
+    maxHeight: 52,
+  },
   sortRow: {
+    alignItems: 'center',
     paddingBottom: 14,
     paddingHorizontal: 18,
   },
@@ -1079,5 +1200,22 @@ const styles = StyleSheet.create({
   userChipText: {
     color: COLORS.text,
     fontWeight: '700',
+  },
+  webDateTimeInput: {
+    backgroundColor: COLORS.background,
+    borderColor: COLORS.border,
+    borderRadius: 12,
+    borderStyle: 'solid',
+    borderWidth: 1,
+    color: COLORS.text,
+    fontFamily: 'system-ui',
+    fontSize: 15,
+    marginBottom: 12,
+    outlineColor: COLORS.primary,
+    paddingBottom: 12,
+    paddingLeft: 14,
+    paddingRight: 14,
+    paddingTop: 12,
+    width: '100%',
   },
 });
