@@ -27,7 +27,15 @@ import {
   formatDate,
   getDeadlineStatus,
 } from './components';
-import { generateId, loadTasks, loadUserName, saveTasks, saveUserName } from './storage';
+import {
+  appendTaskLog,
+  generateId,
+  loadTasks,
+  loadUserName,
+  readTaskLog,
+  saveTasks,
+  saveUserName,
+} from './storage';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
@@ -98,6 +106,7 @@ export default function App() {
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [selectedTask, setSelectedTask] = useState(null);
   const [showEditModal, setShowEditModal] = useState(false);
+  const [debugOffsetDays, setDebugOffsetDays] = useState(0);
   const [draggingTaskId, setDraggingTaskId] = useState(null);
   const [columnLayouts, setColumnLayouts] = useState({});
   const reminderTimers = useRef([]);
@@ -173,6 +182,13 @@ export default function App() {
 
   const sortedTasks = useMemo(() => getSortedTasks(tasks, sortBy), [sortBy, tasks]);
   const boardColumnWidth = Math.max(300, Math.floor((width - 60) / 3));
+  const effectiveNow = getNow();
+
+  function getNow() {
+    const date = new Date();
+    date.setDate(date.getDate() + debugOffsetDays);
+    return date;
+  }
 
   async function persist(nextTasks) {
     setTasks(nextTasks);
@@ -264,6 +280,7 @@ export default function App() {
     };
     task.notificationId = await scheduleTaskNotification(task);
     await persist([...tasks, task]);
+    await appendTaskLog(userName, taskData.title, task.id);
     setShowAddModal(false);
   }
 
@@ -410,6 +427,73 @@ export default function App() {
     setShowNameModal(false);
   }
 
+  async function showTaskLog() {
+    const log = await readTaskLog();
+    Alert.alert('Activity Log File', log);
+  }
+
+  async function fireDebugNotification() {
+    const title = '🧪 Test Notification';
+    const body = `This is a test — simulating +${debugOffsetDays} days.`;
+
+    if (Platform.OS === 'web') {
+      if (typeof window !== 'undefined' && 'Notification' in window) {
+        const permission = window.Notification.permission === 'default'
+          ? await window.Notification.requestPermission()
+          : window.Notification.permission;
+        if (permission === 'granted') {
+          new window.Notification(title, { body });
+        }
+      }
+      Alert.alert(title, body);
+      return;
+    }
+
+    const permission = await Notifications.requestPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert('Notifications disabled', 'Enable notification permission for this app, then try again.');
+      return;
+    }
+
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title,
+        body,
+      },
+      trigger: { seconds: 1 },
+    });
+  }
+
+  const renderDebugPanel = () => {
+    if (!__DEV__) return null;
+    const setOffset = (days) => setDebugOffsetDays(days);
+    return (
+      <View style={styles.debugPanel}>
+        <Text style={styles.debugTitle}>🧪 Test Mode</Text>
+        <Text style={styles.debugText}>Simulating: +{debugOffsetDays} days from today</Text>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.debugButtonRow}>
+          <Pressable style={styles.debugButton} onPress={() => setDebugOffsetDays((prev) => prev - 1)}>
+            <Text style={styles.debugButtonText}>-1 day</Text>
+          </Pressable>
+          <Pressable style={styles.debugButton} onPress={() => setOffset(0)}>
+            <Text style={styles.debugButtonText}>Today</Text>
+          </Pressable>
+          <Pressable style={styles.debugButton} onPress={() => setDebugOffsetDays((prev) => prev + 1)}>
+            <Text style={styles.debugButtonText}>+1 day</Text>
+          </Pressable>
+          {[2, 4, 7, 14].map((days) => (
+            <Pressable key={days} style={styles.debugButton} onPress={() => setOffset(days)}>
+              <Text style={styles.debugButtonText}>+{days}</Text>
+            </Pressable>
+          ))}
+        </ScrollView>
+        <Pressable style={styles.debugNotifyButton} onPress={fireDebugNotification}>
+          <Text style={styles.debugNotifyText}>🔔 Fire Test Notification Now</Text>
+        </Pressable>
+      </View>
+    );
+  };
+
   const renderBoard = () => (
     <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.boardScroll}>
       {COLUMNS.map((column) => (
@@ -429,6 +513,7 @@ export default function App() {
             if (typeof second === 'number') handleCardDrop(first, second, third);
           }}
           columnRef={columnRefs[column.status]}
+          nowOverride={effectiveNow}
         />
       ))}
     </ScrollView>
@@ -443,7 +528,12 @@ export default function App() {
             <Text style={styles.appName}>Nabiul's Task Manager</Text>
             <Text style={styles.subTitle}>A Complete Task Manager Application</Text>
           </View>
-          <Text style={styles.greeting}>{userName ? `Hi, ${userName} 👋` : 'Welcome'}</Text>
+          <View style={styles.headerActions}>
+            <Text style={styles.greeting}>{userName ? `Hi, ${userName} 👋` : 'Welcome'}</Text>
+            <Pressable style={styles.logButton} onPress={showTaskLog}>
+              <Text style={styles.logButtonText}>📄 View Log</Text>
+            </Pressable>
+          </View>
         </View>
         <View style={styles.toggleRow}>
           <Pressable style={[styles.toggle, view === 'board' ? styles.toggleActive : styles.toggleInactive]} onPress={() => setView('board')}>
@@ -459,10 +549,11 @@ export default function App() {
             data={sortedTasks}
             keyExtractor={(item) => item.id}
             contentContainerStyle={styles.listContent}
-            renderItem={({ item }) => <ListViewItem task={item} onPress={openTask} />}
+            renderItem={({ item }) => <ListViewItem task={item} onPress={openTask} nowOverride={effectiveNow} />}
             ListEmptyComponent={<Text style={styles.emptyText}>No tasks yet. Switch to Board and add your first task.</Text>}
           />
         )}
+        {renderDebugPanel()}
         <AddTaskModal
           visible={showAddModal}
           onClose={() => setShowAddModal(false)}
@@ -490,6 +581,7 @@ export default function App() {
           onComplete={(id) => moveTask(id, 'COMPLETED')}
           onAddComment={addComment}
           currentUser={userName || 'User'}
+          nowOverride={effectiveNow}
         />
         <Modal visible={showNameModal} transparent animationType="fade">
           <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.nameOverlay}>
@@ -536,6 +628,55 @@ const styles = StyleSheet.create({
     marginTop: 60,
     textAlign: 'center',
   },
+  debugButton: {
+    alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    borderColor: COLORS.border,
+    borderRadius: 10,
+    borderWidth: 1,
+    justifyContent: 'center',
+    marginRight: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+  },
+  debugButtonRow: {
+    paddingTop: 8,
+  },
+  debugButtonText: {
+    color: COLORS.text,
+    fontSize: 12,
+    fontWeight: '800',
+  },
+  debugNotifyButton: {
+    alignItems: 'center',
+    borderColor: COLORS.completed,
+    borderRadius: 10,
+    borderWidth: 1,
+    marginTop: 8,
+    paddingVertical: 9,
+  },
+  debugNotifyText: {
+    color: COLORS.completed,
+    fontSize: 12,
+    fontWeight: '900',
+  },
+  debugPanel: {
+    backgroundColor: '#111827',
+    borderColor: COLORS.border,
+    borderTopWidth: 1,
+    paddingHorizontal: 18,
+    paddingVertical: 10,
+  },
+  debugText: {
+    color: COLORS.muted,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  debugTitle: {
+    color: COLORS.text,
+    fontSize: 13,
+    fontWeight: '900',
+  },
   greeting: {
     color: COLORS.text,
     flexShrink: 1,
@@ -551,9 +692,26 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingTop: 18,
   },
+  headerActions: {
+    alignItems: 'flex-end',
+    flexShrink: 1,
+    gap: 8,
+  },
   listContent: {
     paddingBottom: 28,
     paddingHorizontal: 18,
+  },
+  logButton: {
+    borderColor: COLORS.border,
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  logButtonText: {
+    color: COLORS.text,
+    fontSize: 12,
+    fontWeight: '900',
   },
   nameButton: {
     alignItems: 'center',

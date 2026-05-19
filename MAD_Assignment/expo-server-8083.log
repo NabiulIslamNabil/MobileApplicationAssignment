@@ -1,0 +1,27 @@
+env: load .env
+env: export APP_NAME APP_VERSION APP_ENV EXPO_PROJECT_SLUG EXPO_OWNER NOTIFICATION_CHANNEL_ID NOTIFICATION_CHANNEL_NAME NOTIFICATION_SOUND STORAGE_KEY_TASKS STORAGE_KEY_USERNAME STORAGE_KEY_SETTINGS ENABLE_NOTIFICATIONS ENABLE_DRAG_DROP ENABLE_ACTIVITY_LOG DEFAULT_THEME
+Starting project at D:\Study Materials\Trimester-11\Mobile Application Development\MobileApplicationAssignment\MAD_Assignment
+Starting Metro Bundler
+Waiting on http://localhost:8083
+Logs for your project will appear below.
+Web Bundled 429ms index.js (755 modules)
+ LOG  [web] Logs will appear in the browser console
+Web .\index.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 32ms index.js (1 module)
+ LOG  [web] Logs will appear in the browser console
+Web .\index.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 28ms index.js (1 module)
+ LOG  [web] Logs will appear in the browser console
+Web .\index.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 35ms index.js (1 module)
+Web Bundled 28ms index.js (1 module)
+ LOG  [web] Logs will appear in the browser console
+ LOG  [web] Logs will appear in the browser console
+Web .\index.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 29ms index.js (1 module)
+Web Bundled 23ms index.js (1 module)
+ LOG  [web] Logs will appear in the browser console
+ LOG  [web] Logs will appear in the browser console
+Web .\index.js ░░░░░░░░░░░░░░░░  0.0% (0/1)
+Web Bundled 28ms index.js (1 module)
+ LOG  [web] Logs will appear in the browser console

@@ -1,6 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Alert,
+  Animated as NativeAnimated,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -17,9 +18,7 @@ import Animated, {
   interpolate,
   useAnimatedStyle,
   useSharedValue,
-  withRepeat,
   withSpring,
-  withTiming,
 } from 'react-native-reanimated';
 
 const COLORS = {
@@ -85,13 +84,102 @@ export function getDeadlineStatus(task) {
   return 'SAFE';
 }
 
-export function getDeadlineColor(task) {
-  const status = getDeadlineStatus(task);
-  if (status === 'COMPLETED') return COLORS.completed;
-  if (status === 'OVERDUE') return COLORS.overdue;
-  if (status === 'URGENT') return COLORS.high;
-  if (status === 'WARNING') return COLORS.medium;
-  return COLORS.primary;
+export function getDeadlineColor(task, nowOverride) {
+  if (task.status === 'COMPLETED' || task.completed === true) {
+    return {
+      border: '#10B981',
+      background: '#064E3B',
+      label: 'completed',
+    };
+  }
+
+  if (!task.deadline) {
+    return {
+      border: '#6366F1',
+      background: 'transparent',
+      label: 'no-deadline',
+    };
+  }
+
+  const now = nowOverride || new Date();
+  const deadline = new Date(task.deadline);
+  const nowDay = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const deadDay = new Date(deadline.getFullYear(), deadline.getMonth(), deadline.getDate());
+  const diffMs = deadDay - nowDay;
+  const diffDays = diffMs / (1000 * 60 * 60 * 24);
+
+  if (diffDays < 0) {
+    return {
+      border: '#7F1D1D',
+      background: '#450A0A',
+      label: 'overdue',
+      pulse: true,
+    };
+  }
+
+  if (diffDays === 0) {
+    return {
+      border: '#EF4444',
+      background: '#1C0A0A',
+      label: 'due-today',
+      pulse: true,
+    };
+  }
+
+  if (diffDays < 1) {
+    return {
+      border: '#EF4444',
+      background: '#1C0A0A',
+      label: 'urgent',
+      pulse: true,
+    };
+  }
+
+  if (diffDays <= 3) {
+    return {
+      border: task.status === 'IN_PROGRESS' ? '#F97316' : '#F59E0B',
+      background: '#1C1200',
+      label: task.status === 'IN_PROGRESS' ? 'in-progress-warning' : 'warning',
+    };
+  }
+
+  if (task.status === 'IN_PROGRESS') {
+    return {
+      border: '#F59E0B',
+      background: '#1C1200',
+      label: 'in-progress-safe',
+    };
+  }
+
+  return {
+    border: '#6366F1',
+    background: 'transparent',
+    label: 'safe',
+  };
+}
+
+function useBorderPulse(task, color) {
+  const pulseAnim = React.useRef(new NativeAnimated.Value(1)).current;
+
+  useEffect(() => {
+    pulseAnim.stopAnimation();
+    pulseAnim.setValue(1);
+
+    if (color.pulse === true) {
+      NativeAnimated.loop(
+        NativeAnimated.sequence([
+          NativeAnimated.timing(pulseAnim, { toValue: 0.4, duration: 800, useNativeDriver: true }),
+          NativeAnimated.timing(pulseAnim, { toValue: 1.0, duration: 800, useNativeDriver: true }),
+        ]),
+      ).start();
+    }
+
+    return () => {
+      pulseAnim.stopAnimation();
+    };
+  }, [color.pulse, pulseAnim, task.status, task.deadline]);
+
+  return pulseAnim;
 }
 
 function getInitials(name) {
@@ -145,20 +233,12 @@ export function AvatarGroup({ users = [], max = 3 }) {
   );
 }
 
-export function TaskCard({ task, onPress, onLongPress, onDragStart, onDragEnd }) {
+export function TaskCard({ task, onPress, onLongPress, onDragStart, onDragEnd, nowOverride }) {
   const translateX = useSharedValue(0);
   const translateY = useSharedValue(0);
   const scale = useSharedValue(1);
-  const pulse = useSharedValue(0);
-  const urgency = getDeadlineStatus(task);
-
-  useEffect(() => {
-    if (urgency === 'URGENT') {
-      pulse.value = withRepeat(withTiming(1, { duration: 900 }), -1, true);
-    } else {
-      pulse.value = 0;
-    }
-  }, [pulse, urgency]);
+  const color = getDeadlineColor(task, nowOverride);
+  const pulseAnim = useBorderPulse(task, color);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [
@@ -169,10 +249,6 @@ export function TaskCard({ task, onPress, onLongPress, onDragStart, onDragEnd })
     opacity: interpolate(scale.value, [1, 1.05], [1, 0.9]),
     zIndex: scale.value > 1 ? 30 : 1,
     elevation: scale.value > 1 ? 12 : 3,
-  }));
-
-  const pulseStyle = useAnimatedStyle(() => ({
-    shadowOpacity: urgency === 'URGENT' ? 0.2 + pulse.value * 0.25 : 0.18,
   }));
 
   const handleGesture = (event) => {
@@ -201,22 +277,24 @@ export function TaskCard({ task, onPress, onLongPress, onDragStart, onDragEnd })
           <Animated.View
             style={[
               styles.card,
-              pulseStyle,
-              {
-                borderLeftColor: getDeadlineColor(task),
-                backgroundColor: task.status === 'COMPLETED' ? COLORS.completedTint : COLORS.surface,
-              },
+              { backgroundColor: COLORS.surface },
             ]}
           >
-            <View style={styles.cardTopRow}>
-              <Text style={styles.cardTitle} numberOfLines={2}>{task.title}</Text>
-              <PriorityBadge priority={task.priority} />
-            </View>
-            <Text style={styles.cardMeta}>{formatDate(task.deadline)}</Text>
-            <Text style={styles.cardMeta}>{formatRequiredTime(task)}</Text>
-            <View style={styles.cardFooter}>
-              <AvatarGroup users={task.assignedUsers} max={3} />
-              <Text style={styles.commentCount}>💬 {task.comments?.length || 0}</Text>
+            <NativeAnimated.View style={[styles.leftBorderStrip, { backgroundColor: color.border, opacity: pulseAnim }]} />
+            {color.background !== 'transparent' ? (
+              <View pointerEvents="none" style={[styles.tintOverlay, { backgroundColor: color.background }]} />
+            ) : null}
+            <View style={styles.cardContent}>
+              <View style={styles.cardTopRow}>
+                <Text style={styles.cardTitle} numberOfLines={2}>{task.title}</Text>
+                <PriorityBadge priority={task.priority} />
+              </View>
+              <Text style={styles.cardMeta}>{formatDate(task.deadline)}</Text>
+              <Text style={styles.cardMeta}>{formatRequiredTime(task)}</Text>
+              <View style={styles.cardFooter}>
+                <AvatarGroup users={task.assignedUsers} max={3} />
+                <Text style={styles.commentCount}>💬 {task.comments?.length || 0}</Text>
+              </View>
             </View>
           </Animated.View>
         </Pressable>
@@ -237,6 +315,7 @@ export function BoardColumn({
   onDragStart,
   columnRef,
   columnWidth,
+  nowOverride,
 }) {
   const handleLayout = () => {
     requestAnimationFrame(() => {
@@ -269,6 +348,7 @@ export function BoardColumn({
             onLongPress={onCardLongPress}
             onDragStart={onDragStart}
             onDragEnd={onCardDrop}
+            nowOverride={nowOverride}
           />
         ))}
       </ScrollView>
@@ -633,7 +713,7 @@ export function AddTaskModal({
   );
 }
 
-export function TaskDetailModal({ task, visible, onClose, onEdit, onDelete, onComplete, onAddComment, currentUser }) {
+export function TaskDetailModal({ task, visible, onClose, onEdit, onDelete, onComplete, onAddComment, currentUser, nowOverride }) {
   const [comment, setComment] = useState('');
 
   useEffect(() => {
@@ -641,6 +721,7 @@ export function TaskDetailModal({ task, visible, onClose, onEdit, onDelete, onCo
   }, [visible, task?.id]);
 
   if (!task) return null;
+  const color = getDeadlineColor(task, nowOverride);
 
   const handlePost = () => {
     const text = comment.trim();
@@ -661,8 +742,15 @@ export function TaskDetailModal({ task, visible, onClose, onEdit, onDelete, onCo
           </View>
           <ScrollView showsVerticalScrollIndicator={false}>
             <View style={styles.detailCard}>
+              <View style={[styles.detailDeadlineStrip, { backgroundColor: color.border }]} />
+              {color.background !== 'transparent' ? (
+                <View pointerEvents="none" style={[styles.tintOverlay, { backgroundColor: color.background }]} />
+              ) : null}
               <View style={styles.detailHeaderRow}>
                 <StatusBadge status={task.status} />
+                <View style={[styles.deadlineIndicator, { borderColor: color.border }]}>
+                  <Text style={[styles.deadlineIndicatorText, { color: color.border }]}>{color.label}</Text>
+                </View>
                 <PriorityBadge priority={task.priority} />
               </View>
               <Text style={styles.detailMeta}>Deadline: {formatDate(task.deadline)}</Text>
@@ -716,41 +804,47 @@ export function TaskDetailModal({ task, visible, onClose, onEdit, onDelete, onCo
   );
 }
 
-export function ListViewItem({ task, onPress }) {
+export function ListViewItem({ task, onPress, nowOverride }) {
+  const color = getDeadlineColor(task, nowOverride);
+  const pulseAnim = useBorderPulse(task, color);
+
   return (
     <Pressable
       style={[
         styles.listItem,
-        {
-          borderLeftColor: getDeadlineColor(task),
-          backgroundColor: task.status === 'COMPLETED' ? COLORS.completedTint : COLORS.surface,
-        },
+        { backgroundColor: COLORS.surface },
       ]}
       onPress={() => onPress(task)}
     >
-      <View style={styles.listTopRow}>
-        <Text style={styles.listTitle} numberOfLines={1}>{task.title}</Text>
-        <PriorityBadge priority={task.priority} />
-      </View>
-      <Text style={styles.listDescription} numberOfLines={2}>
-        {task.description || 'No description added.'}
-      </Text>
-      <View style={styles.listDetailGrid}>
-        <View style={styles.listDetailCell}>
-          <Text style={styles.listLabel}>Status</Text>
-          <StatusBadge status={task.status} />
+      <NativeAnimated.View style={[styles.leftBorderStrip, { backgroundColor: color.border, opacity: pulseAnim }]} />
+      {color.background !== 'transparent' ? (
+        <View pointerEvents="none" style={[styles.tintOverlay, styles.lightTintOverlay, { backgroundColor: color.background }]} />
+      ) : null}
+      <View style={styles.cardContent}>
+        <View style={styles.listTopRow}>
+          <Text style={styles.listTitle} numberOfLines={1}>{task.title}</Text>
+          <PriorityBadge priority={task.priority} />
         </View>
-        <View style={styles.listDetailCell}>
-          <Text style={styles.listLabel}>Deadline</Text>
-          <Text style={styles.listMeta}>{formatDate(task.deadline)}</Text>
-        </View>
-        <View style={styles.listDetailCell}>
-          <Text style={styles.listLabel}>Time</Text>
-          <Text style={styles.listMeta}>{formatRequiredTime(task)}</Text>
-        </View>
-        <View style={styles.listDetailCell}>
-          <Text style={styles.listLabel}>Assigned</Text>
-          <AvatarGroup users={task.assignedUsers} max={3} />
+        <Text style={styles.listDescription} numberOfLines={2}>
+          {task.description || 'No description added.'}
+        </Text>
+        <View style={styles.listDetailGrid}>
+          <View style={styles.listDetailCell}>
+            <Text style={styles.listLabel}>Status</Text>
+            <StatusBadge status={task.status} />
+          </View>
+          <View style={styles.listDetailCell}>
+            <Text style={styles.listLabel}>Deadline</Text>
+            <Text style={styles.listMeta}>{formatDate(task.deadline)}</Text>
+          </View>
+          <View style={styles.listDetailCell}>
+            <Text style={styles.listLabel}>Time</Text>
+            <Text style={styles.listMeta}>{formatRequiredTime(task)}</Text>
+          </View>
+          <View style={styles.listDetailCell}>
+            <Text style={styles.listLabel}>Assigned</Text>
+            <AvatarGroup users={task.assignedUsers} max={3} />
+          </View>
         </View>
       </View>
     </Pressable>
@@ -854,11 +948,12 @@ const styles = StyleSheet.create({
     fontWeight: '900',
   },
   card: {
-    borderLeftWidth: 5,
     borderRadius: 14,
     elevation: 3,
     marginBottom: 12,
+    overflow: 'hidden',
     padding: 14,
+    paddingLeft: 20,
     shadowColor: '#000000',
     shadowOffset: { height: 8, width: 0 },
     shadowRadius: 14,
@@ -868,6 +963,10 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     marginTop: 10,
+  },
+  cardContent: {
+    position: 'relative',
+    zIndex: 1,
   },
   cardMeta: {
     color: COLORS.muted,
@@ -986,12 +1085,32 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     borderWidth: 1,
     gap: 8,
+    overflow: 'hidden',
     padding: 14,
+    paddingLeft: 20,
+  },
+  deadlineIndicator: {
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+  },
+  deadlineIndicatorText: {
+    fontSize: 10,
+    fontWeight: '900',
+    textTransform: 'uppercase',
   },
   detailHeaderRow: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 8,
+  },
+  detailDeadlineStrip: {
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    top: 0,
+    width: 5,
   },
   detailMeta: {
     color: COLORS.muted,
@@ -1060,6 +1179,16 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     marginTop: -4,
   },
+  leftBorderStrip: {
+    bottom: 0,
+    left: 0,
+    position: 'absolute',
+    top: 0,
+    width: 5,
+  },
+  lightTintOverlay: {
+    opacity: 0.28,
+  },
   listBadgeRow: {
     alignItems: 'center',
     flexDirection: 'row',
@@ -1088,12 +1217,13 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   listItem: {
-    borderLeftWidth: 5,
     borderRadius: 14,
     borderColor: COLORS.border,
     borderWidth: 1,
     marginBottom: 12,
+    overflow: 'hidden',
     padding: 14,
+    paddingLeft: 20,
   },
   listDescription: {
     color: COLORS.muted,
@@ -1296,6 +1426,10 @@ const styles = StyleSheet.create({
   textArea: {
     minHeight: 92,
     textAlignVertical: 'top',
+  },
+  tintOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    opacity: 0.42,
   },
   timeInput: {
     flex: 1,
